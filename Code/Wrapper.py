@@ -212,10 +212,22 @@ def calculate_epipolar_error(F, points1, points2):
     
     return np.mean(errors)
 
+def EssentialMatrixFromFundamentalMatrix(F, K):
+    E = K.T @ F @ K
+    # Normalize the Essential matrix
+    U, S, Vt = np.linalg.svd(E)
+    # Force singular values to [1,1,0]
+    S = np.array([1, 1, 0])
+    E = U @ np.diag(S) @ Vt
+    return E
+
+
+
+
 # Complete example usage
 def main():
     # Example usage with your matches.txt file
-    matches_file = r'C:\Users\farha\OneDrive\Desktop\P2Data\P2Data\matching1.txt'
+    matches_file = r'matching1.txt'
     image_id1 = 1  # Replace with your first image ID
     image_id2 = 2  # Replace with your second image ID
     
@@ -233,6 +245,13 @@ def main():
     
     # Calculate error
     error = calculate_epipolar_error(F, points1, points2)
+
+    # Load K matrix
+    K = np.loadtxt('calibration.txt')
+    E = EssentialMatrixFromFundamentalMatrix(F,K)
+
+    print("K matrix:\n",K)
+    print("E\n",E)
     
     print("Fundamental Matrix:")
     print(F)
