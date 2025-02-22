@@ -365,7 +365,7 @@ def main():
 
 
     # Triangulate points
-    X = LinearTriangulation(K, poses[0][0], poses[0][1], poses[1][0], poses[1][1], points1, points2)
+    X = LinearTriangulation(K, poses[0][0], poses[0][1], poses[1][0], poses[1][1], inlier_points1, inlier_points2)
     print("\nTriangulated 3D points:")
     print(X)
     print(X.shape)
