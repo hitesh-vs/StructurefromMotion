@@ -221,6 +221,59 @@ def EssentialMatrixFromFundamentalMatrix(F, K):
     E = U @ np.diag(S) @ Vt
     return E
 
+def ExtractCameraPose(E):
+    # SVD of Essential matrix
+    U, S, Vt = np.linalg.svd(E)
+    W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+
+    R1 = U @ W @ Vt
+    R2 = U @ W.T @ Vt
+    c1 = U[:, 2]
+    c2 = -U[:, 2]
+
+    if np.linalg.det(R1) < 0:
+        R1 = -R1
+        c1 = -c1
+        c2 = -c2
+
+    if np.linalg.det(R2) < 0:
+        R2 = -R2
+        c2 = -c2
+        c1 = -c1
+
+    return (R1, c1), (R2, c2), (R1, c2), (R2, c1)
+
+def LinearTriangulation(K, R1, c1, R2, c2, x1, x2):
+    # Make projection matrices
+    P1 = K @ R1 @ np.hstack((np.eye(3), -c1.reshape(3,1)))
+    P2 = K @ R2 @ np.hstack((np.eye(3), -c2.reshape(3,1)))
+
+    # Convert image points to homogeneous coordinates
+    x1_h = np.hstack((x1, np.ones((x1.shape[0], 1))))   # (N, 3)
+    x2_h = np.hstack((x2, np.ones((x2.shape[0], 1))))   # (N, 3)    
+
+    X = np.zeros((x1.shape[0], 3))
+    for i in range(x1.shape[0]):
+        A = np.vstack((x1_h[i, 0] * P1[2, :] - P1[0, :],
+                       x1_h[i, 1] * P1[2, :] - P1[1, :],
+                       x2_h[i, 0] * P2[2, :] - P2[0, :],
+                       x2_h[i, 1] * P2[2, :] - P2[1, :]))
+    
+        _, _, Vt = np.linalg.svd(A)
+        X[i] = Vt[-1, :3] / Vt[-1, 3]
+
+    return X
+
+def DisambiguateCameraPose(poses, X):
+    # Check if points are in front of the camera
+    for i, (R, c) in enumerate(poses):
+        if np.all((R @ X.T + c.reshape(3, 1))[2] > 0):
+            return i
+        
+    # Need to fix this
+
+    return None
+
 
 
 
@@ -256,6 +309,22 @@ def main():
     print("Fundamental Matrix:")
     print(F)
     print("\nAverage Epipolar Error:", error)
+
+    # Extract camera poses
+    poses = ExtractCameraPose(E)
+    print("\nCamera Poses:")
+    for i, pose in enumerate(poses):
+        R, c = pose
+        print(f"Pose {i+1}:\nR:\n{R}\nc:\n{c}")
+
+
+    # Triangulate points
+    X = LinearTriangulation(K, poses[0][0], poses[0][1], poses[1][0], poses[1][1], points1, points2)
+    print("\nTriangulated 3D points:")
+    print(X)
+    print(X.shape)
+
+    #visualize_reconstruction(X)
     
     return F, points1, points2
 
