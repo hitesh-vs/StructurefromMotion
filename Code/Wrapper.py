@@ -798,6 +798,52 @@ def VisualizeImagePoints(points1, points2, K, R1, C1, R2, C2, X_initial, X_refin
     except ImportError:
         print("Matplotlib or OpenCV not available for visualization")
 
+def LinearPnP(K, X, x):
+    # Convert 3D points to homogeneous coordinates
+    X_h = np.hstack((X, np.ones((X.shape[0], 1))))   # (N, 4)
+    
+    # Convert image points to homogeneous coordinates
+    x_h = np.hstack((x, np.ones((x.shape[0], 1))))   # (N, 3)
+    
+    # Normalize image points
+    x_norm = np.linalg.inv(K) @ x_h.T   # (3, N)
+    x_norm = x_norm.T
+    
+    A = np.zeros((2 * X.shape[0], 12))
+    for i in range(X.shape[0]):
+        X_row = X_h[i]
+        x_row = x_norm[i]
+        
+        # Just filling up rows of 2Nx12 matrix 
+        A[2*i, :4] = X_row
+        A[2*i, 8:] = -x_row[0] * X_row
+        
+        A[2*i + 1, 4:8] = X_row
+        A[2*i + 1, 8:] = -x_row[1] * X_row
+    
+    _, _, Vt = np.linalg.svd(A)
+    P = Vt[-1].reshape(3, 4)
+    
+    # Ensure that the last element of the projection matrix is positive
+    if P[2, 3] < 0:
+        P = -P
+
+    # R matrix without enforcing orthogonality
+    R = np.linalg.inv(K) @ P[:, :3]
+
+    # Enforce orthogonality
+    U, _, Vt = np.linalg.svd(R)
+    R = U @ Vt # SVD Cleanup
+
+    if np.linalg.det(R) < 0:
+        R = -R
+
+    # Translation vector
+    C = np.linalg.inv(K) @ P[:, 3]
+
+    
+    return R, C
+
 def main():
     # Example usage with your matches.txt file
     matches_file = 'matching1.txt'
