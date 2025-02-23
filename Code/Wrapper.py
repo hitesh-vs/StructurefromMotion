@@ -1,5 +1,7 @@
 import numpy as np
 from scipy.optimize import least_squares
+import cv2
+import matplotlib.pyplot as plt
 
 
 
@@ -799,58 +801,246 @@ def VisualizeImagePoints(points1, points2, K, R1, C1, R2, C2, X_initial, X_refin
         print("Matplotlib or OpenCV not available for visualization")
 
 def LinearPnP(K, X, x):
-    # Convert 3D points to homogeneous coordinates
-    X_h = np.hstack((X, np.ones((X.shape[0], 1))))   # (N, 4)
+    """
+    Linear Perspective-n-Point algorithm to estimate camera pose
     
-    # Convert image points to homogeneous coordinates
-    x_h = np.hstack((x, np.ones((x.shape[0], 1))))   # (N, 3)
-    
-    # Normalize image points
-    x_norm = np.linalg.inv(K) @ x_h.T   # (3, N)
-    x_norm = x_norm.T
-    
-    A = np.zeros((2 * X.shape[0], 12))
-    for i in range(X.shape[0]):
-        X_row = X_h[i]
-        x_row = x_norm[i]
+    Args:
+        K: (3,3) Camera calibration matrix
+        X: (N,3) 3D points in world coordinates
+        x: (N,2) 2D image points
         
-        # Just filling up rows of 2Nx12 matrix 
-        A[2*i, :4] = X_row
-        A[2*i, 8:] = -x_row[0] * X_row
+    Returns:
+        R: (3,3) Rotation matrix
+        C: (3,) Camera center
+    """
+    # Convert 2D points to normalized coordinates
+    x_normalized = np.zeros_like(x)
+    K_inv = np.linalg.inv(K)
+    
+    # Homogenise each point, then normalize (Kinv to remove intrinsic parameters)
+    for i in range(x.shape[0]):
+        p_homogeneous = np.array([x[i,0], x[i,1], 1.0])
+        p_normalized = K_inv @ p_homogeneous
+        x_normalized[i] = p_normalized[:2]
+    
+    # Build the A matrix for DLT
+    A = np.zeros((2*len(X), 12))
+    
+    for i in range(len(X)):
+        X_i = X[i]  # Current 3D point
+        x_i = x_normalized[i]  # Current normalized 2D point
         
-        A[2*i + 1, 4:8] = X_row
-        A[2*i + 1, 8:] = -x_row[1] * X_row
+        X_homo = np.array([X_i[0], X_i[1], X_i[2], 1])
+        
+        # Fill in the 2Nx12 matrix 
+        A[2*i] = np.hstack([X_homo, np.zeros(4), -x_i[0] * X_homo])
+        A[2*i + 1] = np.hstack([np.zeros(4), X_homo, -x_i[1] * X_homo])
     
-    _, _, Vt = np.linalg.svd(A)
-    P = Vt[-1].reshape(3, 4)
+    # Solve using SVD
+    _, _, Vh = np.linalg.svd(A)
+    P = Vh[-1].reshape(3, 4)
     
-    # Ensure that the last element of the projection matrix is positive
-    if P[2, 3] < 0:
-        P = -P
-
-    # R matrix without enforcing orthogonality
-    R = np.linalg.inv(K) @ P[:, :3]
-
-    # Enforce orthogonality
-    U, _, Vt = np.linalg.svd(R)
-    R = U @ Vt # SVD Cleanup
-
+    # Extract R and t from P
+    R = P[:, :3]
+    t = P[:, 3]
+    
+    # Enforce orthonormality on R
+    U, _, Vh = np.linalg.svd(R)
+    R = U @ Vh
+    
+    # Ensure proper rotation matrix (det(R) = 1)
     if np.linalg.det(R) < 0:
         R = -R
-
-    # Translation vector
-    C = np.linalg.inv(K) @ P[:, 3]
-
+        #t = -t
+    
+    # Calculate camera center C = -R^T * t
+    C = -R.T @ t
     
     return R, C
+
+def PnPRANSAC(X, x, K, epsilon_threshold, M=1000, N=None):
+    """
+    RANSAC implementation for PnP following the pseudocode
+    Args:
+        X: (N,3) 3D points
+        x: (N,2) 2D points
+        K: (3,3) camera intrinsic matrix
+        epsilon_threshold: threshold for reprojection error
+        M: number of RANSAC iterations
+        N: number of points to check (if None, uses all points)
+    """
+    if N is None:
+        N = len(X)
+    
+    n = 0  # Size of largest inlier set found so far
+    best_S = None  # Best inlier set
+    
+    for i in range(M):
+        # Choose 6 correspondences randomly
+        sample_indices = np.random.choice(len(X), 6, replace=False)
+        X_sample = X[sample_indices]
+        x_sample = x[sample_indices]
+        
+        # Compute pose using LinearPnP
+        R, C = LinearPnP(K,X_sample, x_sample)
+        
+        # Construct projection matrix P
+        t = -R @ C
+        P = K @ np.hstack((R, t.reshape(3,1)))
+        
+        # Initialize inlier set
+        S = set()
+        
+        # Check all N points
+        for j in range(N):
+            # Compute reprojection error as in pseudocode
+            X_homogeneous = np.append(X[j], 1)
+            P_X = P @ X_homogeneous
+            
+            # Calculate reprojection error using the formula from pseudocode
+            error = ((x[j,0] - P_X[0]/P_X[2])**2 + 
+                    (x[j,1] - P_X[1]/P_X[2])**2)
+            
+            # Check if point is an inlier
+            if error < epsilon_threshold:
+                S.add(j)
+        
+        # Update best solution if we found more inliers
+        if n < len(S):
+            n = len(S)
+            best_S = S
+    
+    # Return the best inlier set
+    return best_S
+
+def get_pnp_correspondences(matches_file, ref_image_id, new_image_id, reference_points, valid_line_numbers):
+    """
+    Get 2D-3D correspondences for PnP by matching points from a new image with existing 3D points.
+    
+    Args:
+        matches_file: Path to matches file
+        ref_image_id: ID of reference image (1 or 2) used in initial reconstruction
+        new_image_id: ID of new image for PnP
+        reference_points: Points from reference image used in reconstruction
+        valid_line_numbers: Line numbers of valid points from initial reconstruction
+        
+    Returns:
+        points_3d: Array of 3D points
+        points_2d: Corresponding 2D points in new image
+    """
+    points_2d = []
+    indices = []  # To keep track of which 3D points we matched
+    
+    with open(matches_file, 'r') as f:
+        lines = f.readlines()
+        
+        # Find nFeatures
+        n_features = 0
+        for line in lines:
+            line = line.strip()
+            if line and 'nFeatures' in line:
+                n_features = int(line.split(': ')[1])
+                break
+        
+        # Process each feature line
+        current_feature = 0
+        line_idx = 1
+        
+        while current_feature < n_features and line_idx < len(lines):
+            # Get next non-empty line
+            while line_idx < len(lines):
+                line = lines[line_idx].strip()
+                if line:
+                    break
+                line_idx += 1
+            
+            if line_idx >= len(lines):
+                break
+                
+            # Check if this line number is in our valid points
+            if (line_idx + 1) in valid_line_numbers:
+                try:
+                    values = line.split()
+                    if not values:
+                        line_idx += 1
+                        continue
+                        
+                    line_data = [float(x) for x in values]
+                    n_matches = int(line_data[0])
+                    current_u, current_v = line_data[4:6]
+                    matches_data = line_data[6:]
+                    
+                    # Look for match with new image
+                    for i in range(0, len(matches_data), 3):
+                        if i + 2 >= len(matches_data):
+                            break
+                            
+                        match_image_id = int(matches_data[i])
+                        match_u = matches_data[i + 1]
+                        match_v = matches_data[i + 2]
+                        
+                        if match_image_id == new_image_id:
+                            points_2d.append([match_u, match_v])
+                            # Get index in reference_points array
+                            idx = valid_line_numbers.index(line_idx + 1)
+                            indices.append(idx)
+                            break
+                            
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Error processing line {line_idx + 1}: {e}")
+                    
+            current_feature += 1
+            line_idx += 1
+    
+    points_2d = np.array(points_2d)
+    # Get corresponding 3D points using saved indices
+    points_3d = reference_points[indices]
+    
+    print(f"Found {len(points_2d)} 2D-3D correspondences for PnP")
+    return points_3d, points_2d
+
+def project_3d_to_2d(points_3d, K, R, C):
+    # Convert camera center to translation vector
+    t = -R @ C.reshape(3, 1)
+    
+    # Use cv2.projectPoints to project the 3D points
+    projected_points, _ = cv2.projectPoints(
+        points_3d, R, t, K, distCoeffs=None
+    )
+    
+    # Flatten the projected points array
+    return projected_points.reshape(-1, 2)
+
+def visualize_reprojection(image_path, detected_points, reprojected_points):
+    # Load and display the image
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    plt.figure(figsize=(10, 8))
+    plt.imshow(img)
+    
+    # Plot detected points (green)
+    plt.scatter(detected_points[:, 0], detected_points[:, 1], 
+                c='lime', marker='o', label='Detected Points')
+    
+    # Plot reprojected points (red)
+    plt.scatter(reprojected_points[:, 0], reprojected_points[:, 1], 
+                c='red', marker='x', label='Reprojected Points')
+    
+    plt.legend()
+    plt.title("Reprojection Visualization")
+    plt.axis("off")
+    plt.show()
+
 
 def main():
     # Example usage with your matches.txt file
     matches_file = 'matching1.txt'
     image_id1 = 1  # Replace with your first image ID
     image_id2 = 2 # Replace with your second image ID
-    image1_path = r'C:\Users\farha\OneDrive\Desktop\P2Data\P2Data\1.png'
-    image2_path = r'C:\Users\farha\OneDrive\Desktop\P2Data\P2Data\2.png'
+    image1_path = r'1.png'
+    image2_path = r'2.png'
+    image3_path = r'3.png'
     
     # Parse matching points
     points1, points2, line_numbers = read_matches_file(matches_file, image_id1, image_id2)
@@ -941,6 +1131,42 @@ def main():
     image1_path,                # Path to first image
     image2_path                 # Path to second image
 )
+    
+    # PnP from camera 3
+
+    # Load 3D points
+    points_3d, points_2d = get_pnp_correspondences(
+        'matching1.txt',  # matches between image 2 and 3
+        1,               # reference image ID (image 2)
+        3,               # new image ID
+        X_refined,       # refined 3D points
+        valid_line_numbers  # line numbers from initial reconstruction
+    )
+    
+    # Now you can use these correspondences for PnP
+    if len(points_2d) >= 6:  # Minimum points needed for PnP
+        R3, C3 = LinearPnP(K, points_3d, points_2d)
+        # Optional: Run PnP RANSAC
+        inliers = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=10)
+
+    # Visualize the 3D reconstruction with camera 3
+    #VisualizeReconstruction(X_refined, R3, C3)
+
+    print("Number of inliers:", len(inliers))
+
+
+    # Visualize the 3D reconstruction with camera 3
+    inlier_indices = np.array(list(inliers))
+    inlier_points = X_refined[inlier_indices]
+    VisualizeXZPlaneViewInitial(inlier_points, R3, C3)
+
+    # Project the 3D points into the image plane
+    reprojected_points = project_3d_to_2d(points_3d, K, R3, C3)
+
+    # Visualize reprojection on an image
+    visualize_reprojection('3.png ', points_2d, reprojected_points)
+
+
 
 
 
