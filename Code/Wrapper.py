@@ -130,7 +130,8 @@ def calculate_epipolar_error(F, points1, points2):
     
     return np.mean(errors)
 
-def GetInlierRANSANC(points1, points2, line_numbers, num_iterations=1000, threshold=0.01):
+
+def GetInlierRANSANC(points1, points2, line_numbers, num_iterations=1000, threshold=0.125):
 
     best_F = None
     best_inliers = []
@@ -692,11 +693,118 @@ def calculate_mean_reprojection_error(X, K, R1, C1, R2, C2, points1, points2):
     return total_error / len(X)
 
 
+def VisualizeImagePoints(points1, points2, K, R1, C1, R2, C2, X_initial, X_refined, img1_path, img2_path):
+    """
+    Visualize original and reprojected points overlaid on both images in a grid layout.
+    Top row: Linear triangulation results
+    Bottom row: Non-linear triangulation results
+    
+    Args:
+        points1, points2: Original feature points in both images
+        K: Camera calibration matrix
+        R1, C1: First camera pose (typically identity and zero)
+        R2, C2: Second camera pose
+        X_initial: 3D points from linear triangulation
+        X_refined: 3D points from non-linear optimization
+        img1_path, img2_path: Paths to the input images
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import cv2
+        
+        # Read images
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        # Convert BGR to RGB
+        img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+        
+        # Create a 2x2 grid of plots
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Function to plot points for one image
+        def plot_points(ax, img, orig_points, proj_points, title):
+            # Show the image
+            ax.imshow(img)
+            
+            ax.scatter(orig_points[:, 0], orig_points[:, 1], 
+                      c='lime', marker='o', s=20, label='Original Points',
+                      alpha=0.7)
+            
+            # Plot reprojected points in green
+            ax.scatter(proj_points[:, 0], proj_points[:, 1], 
+                      c='red', marker='o', s=20, label='Reprojected Points',
+                      alpha=0.7)
+            
+            
+            ax.set_title(title)
+            ax.legend()
+            
+            # Remove axis ticks but keep the image extent
+            ax.set_xticks([])
+            ax.set_yticks([])
+        
+        # Get reprojected points
+        def project_3D_points(X, K, R, C):
+            C = C.reshape(3, 1)
+            P = K @ R @ np.hstack([np.eye(3), -C])
+            
+            # Convert X to homogeneous coordinates and project
+            X_homog = np.hstack((X, np.ones((X.shape[0], 1))))
+            proj_points = []
+            
+            for X_i in X_homog:
+                # Project point
+                x = P @ X_i
+                # Convert to inhomogeneous coordinates
+                x = x[:2] / x[2]
+                proj_points.append(x)
+            
+            return np.array(proj_points)
+        
+        # Get reprojections for linear triangulation
+        proj1_linear = project_3D_points(X_initial, K, R1, C1)
+        proj2_linear = project_3D_points(X_initial, K, R2, C2)
+        
+        # Get reprojections for non-linear triangulation
+        proj1_nonlinear = project_3D_points(X_refined, K, R1, C1)
+        proj2_nonlinear = project_3D_points(X_refined, K, R2, C2)
+        
+        # Plot linear triangulation results
+        plot_points(axes[0, 0], img1, points1, proj1_linear, 'Image 1 - Linear Triangulation')
+        plot_points(axes[0, 1], img2, points2, proj2_linear, 'Image 2 - Linear Triangulation')
+        
+        # Plot non-linear triangulation results
+        plot_points(axes[1, 0], img1, points1, proj1_nonlinear, 'Image 1 - Non-linear Triangulation')
+        plot_points(axes[1, 1], img2, points2, proj2_nonlinear, 'Image 2 - Non-linear Triangulation')
+        
+        # Adjust layout
+        plt.tight_layout()
+        plt.show()
+        
+        # Calculate and print mean reprojection errors
+        def calculate_mean_error(points, proj_points):
+            return np.mean(np.sqrt(np.sum((points - proj_points)**2, axis=1)))
+        
+        # print("\nMean Reprojection Errors:")
+        # print(f"Linear Triangulation:")
+        # print(f"  Image 1: {calculate_mean_error(points1, proj1_linear):.4f} pixels")
+        # print(f"  Image 2: {calculate_mean_error(points2, proj2_linear):.4f} pixels")
+        # print(f"Non-linear Triangulation:")
+        # print(f"  Image 1: {calculate_mean_error(points1, proj1_nonlinear):.4f} pixels")
+        # print(f"  Image 2: {calculate_mean_error(points2, proj2_nonlinear):.4f} pixels")
+        
+    except ImportError:
+        print("Matplotlib or OpenCV not available for visualization")
+
 def main():
     # Example usage with your matches.txt file
     matches_file = 'matching1.txt'
     image_id1 = 1  # Replace with your first image ID
     image_id2 = 2 # Replace with your second image ID
+    image1_path = r'C:\Users\farha\OneDrive\Desktop\P2Data\P2Data\1.png'
+    image2_path = r'C:\Users\farha\OneDrive\Desktop\P2Data\P2Data\2.png'
     
     # Parse matching points
     points1, points2, line_numbers = read_matches_file(matches_file, image_id1, image_id2)
@@ -775,7 +883,18 @@ def main():
     # VisualizeReconstruction(X_best[valid_indices], R_best, C_best) 
     # VisualizeReconstructionComparison(X_initial, X_refined, R_best, C_best)
     # VisualizeXZPlaneViewInitial(X_initial, R_best, C_best)
-    VisualizeXZPlaneView(X_initial, X_refined, R_best, C_best)
+    # VisualizeXZPlaneView(X_initial, X_refined, R_best, C_best) 
+
+    VisualizeImagePoints(
+    valid_points1, valid_points2,  # Original 2D points
+    K,                            # Camera calibration
+    np.eye(3), np.zeros(3),      # First camera pose
+    R_best, C_best,              # Second camera pose
+    X_initial,                    # 3D points from linear triangulation
+    X_refined,                    # 3D points from non-linear optimization
+    image1_path,                # Path to first image
+    image2_path                 # Path to second image
+)
 
 
 
