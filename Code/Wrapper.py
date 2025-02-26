@@ -2,7 +2,8 @@ import numpy as np
 from scipy.optimize import least_squares
 import cv2
 import matplotlib.pyplot as plt
-
+import numpy as np
+import matplotlib.colors as mcolors
 
 
 def read_matches_file(filename, image_id1, image_id2):
@@ -604,8 +605,12 @@ def VisualizeXZPlaneViewInitial(X_initial, R2, C2):
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        # Make axes equal to preserve scale
-        plt.axis('equal')
+        # Set specific axis limits as requested
+        plt.xlim(-15, 15)     # X axis from -15 to 15
+        plt.ylim(-5, 25)       # Z axis from 0 to 25
+        
+        # No longer using equal aspect ratio to enforce the specific ranges
+        # plt.axis('equal')
         
         plt.show()
         
@@ -676,6 +681,113 @@ def VisualizeXZPlaneView(X_initial, X_refined, R2, C2):
         
     except ImportError:
         print("Matplotlib not available for visualization")
+
+
+def VisualizeXZPlaneViewComplete(Xset_list, Rset, Cset, image_paths=None):
+    """
+    Visualize the XZ plane view of the complete 3D reconstruction with multiple cameras.
+    
+    Args:
+        Xset_list: List of arrays containing 3D points for each pair (1,2), (1,3), etc.
+        Rset: List of rotation matrices for cameras 2, 3, 4, 5
+        Cset: List of camera center positions for cameras 2, 3, 4, 5
+        image_paths: Optional list of image file names for labeling
+    """
+
+    
+    # Create the figure
+    plt.figure(figsize=(4.5, 6))
+    
+    # Define colors for different point sets
+    colors = list(mcolors.TABLEAU_COLORS.values())
+    
+    # Plot the 3D points from each pair with different colors
+    for i, X_points in enumerate(Xset_list):
+        if X_points is not None and len(X_points) > 0:
+            plt.scatter(X_points[:, 0], X_points[:, 2], 
+                      c=colors[i % len(colors)], marker='.', s=10, alpha=0.6,
+                      label=f'Points from pair (1,{i+2})')
+    
+    # Plot camera 1 at the origin
+    plt.scatter(0, 0, c='black', marker='o', s=150, label='Camera 1 (Reference)')
+    
+    # Draw camera 1 orientation
+    plt.arrow(0, 0, 0.5, 0, head_width=0.1, head_length=0.1, fc='black', ec='black', alpha=0.7)
+    plt.arrow(0, 0, 0, 0.5, head_width=0.1, head_length=0.1, fc='black', ec='black', alpha=0.7)
+    
+    # Plot cameras 2-5 with orientation vectors
+    camera_colors = ['red', 'green', 'blue', 'purple']
+    
+    for i, (R, C) in enumerate(zip(Rset, Cset)):
+        # Flatten camera center to get coordinates
+        C_pos = C.flatten()
+        
+        # Label for the camera
+        camera_label = f'Camera {i+2}'
+        if image_paths and (i+1) < len(image_paths):
+            camera_label = f'Camera {i+2} ({image_paths[i+1].split("/")[-1]})'
+        
+        # Plot the camera
+        plt.scatter(C_pos[0], C_pos[2], c=camera_colors[i % len(camera_colors)], 
+                   marker='o', s=150, label=camera_label)
+        
+        # Draw x-axis orientation
+        plt.arrow(C_pos[0], C_pos[2], 
+                 R[0, 0]*0.5, R[2, 0]*0.5, 
+                 head_width=0.1, head_length=0.1, 
+                 fc=camera_colors[i % len(camera_colors)], 
+                 ec=camera_colors[i % len(camera_colors)], alpha=0.7)
+        
+        # Draw z-axis orientation (principal axis of the camera)
+        plt.arrow(C_pos[0], C_pos[2], 
+                 R[0, 2]*0.5, R[2, 2]*0.5, 
+                 head_width=0.1, head_length=0.1, 
+                 fc=camera_colors[i % len(camera_colors)], 
+                 ec=camera_colors[i % len(camera_colors)], alpha=0.7)
+        
+        # Add text label next to the camera
+        plt.text(C_pos[0]+0.1, C_pos[2]+0.1, f'C{i+2}', fontsize=12, 
+                color=camera_colors[i % len(camera_colors)])
+    
+    # Set plot properties
+    plt.xlabel('X Axis', fontsize=14)
+    plt.ylabel('Z Axis', fontsize=14)
+    plt.title('Complete 3D Reconstruction - XZ Plane View', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    
+    # Add a legend with smaller markers for better visibility
+    plt.legend(loc='upper right', markerscale=2)
+    
+    # Determine appropriate axis limits based on both cameras and points
+    all_points = np.vstack([X for X in Xset_list if X is not None and len(X) > 0])
+    all_cameras = np.vstack([np.zeros(3)] + [C.flatten() for C in Cset])
+    
+    # Calculate min/max for X and Z coordinates
+    min_x = min(np.min(all_points[:, 0]), np.min(all_cameras[:, 0]))
+    max_x = max(np.max(all_points[:, 0]), np.max(all_cameras[:, 0]))
+    min_z = min(np.min(all_points[:, 2]), np.min(all_cameras[:, 2]))
+    max_z = max(np.max(all_points[:, 2]), np.max(all_cameras[:, 2]))
+    
+    # Add some padding
+    padding_x = (max_x - min_x) * 0.1
+    padding_z = (max_z - min_z) * 0.1
+    
+    plt.xlim(min_x - padding_x, max_x + padding_x)
+    plt.ylim(min_z - padding_z, max_z + padding_z)
+    
+    # You can uncomment below to use fixed limits as in your original function
+    plt.xlim(-7.5, 10)
+    plt.ylim(-5, 20)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+
+    
+
+# Uncomment to run the example
+# example_usage()
 
 def calculate_mean_reprojection_error(X, K, R1, C1, R2, C2, points1, points2):
     """
@@ -1023,10 +1135,10 @@ def get_pnp_correspondences(matches_file, ref_image_id, new_image_id, reference_
     
     print(f"Found {len(points_2d)} 2D-3D correspondences for PnP")
     # Optional: print some sample correspondences for verification
-    if len(points_2d) > 0:
-        print("\nSample correspondences (first 3):")
-        for i in range(min(3, len(points_2d))):
-            print(f"Ref Image ({points_ref_2d[i]}) → 3D Point ({points_3d[i]}) → New Image ({points_2d[i]})")
+    # if len(points_2d) > 0:
+    #     print("\nSample correspondences (first 3):")
+    #     for i in range(min(3, len(points_2d))):
+    #         print(f"Ref Image ({points_ref_2d[i]}) → 3D Point ({points_3d[i]}) → New Image ({points_2d[i]})")
     
     return points_3d, points_2d
 
@@ -1125,10 +1237,12 @@ def main():
     image2_path = r'2.png'
     image3_path = r'3.png'
     
+    Rset = []
+    Cset = []
+    Xset = []
+
     # Parse matching points
     points1, points2, line_numbers = read_matches_file(matches_file, image_id1, image_id2)
-    
-    print(f"Found {len(points1)} potential matches")
     
     if len(points1) < 8:
         print(f"Not enough matches found between images {image_id1} and {image_id2}")
@@ -1136,19 +1250,13 @@ def main():
         return
     
     # Run RANSAC to find inliers and estimate F
-    best_F, inliers, inlier_lines = GetInlierRANSANC(points1, points2, line_numbers)
+    best_F, initial_inliers, inlier_lines = GetInlierRANSANC(points1, points2, line_numbers)
     
     # Calculate error using inliers
-    if len(inliers) >= 8:
-        inlier_points1 = points1[inliers]
-        inlier_points2 = points2[inliers]
+    if len(initial_inliers) >= 8:
+        inlier_points1 = points1[initial_inliers]
+        inlier_points2 = points2[initial_inliers]
         error = calculate_epipolar_error(best_F, inlier_points1, inlier_points2)
-        
-        print("\nFundamental Matrix:")
-        print(best_F)
-        print(f"\nNumber of inliers: {len(inliers)} out of {len(points1)} points")
-        # print("Line numbers of inliers:", inlier_lines)
-        print("\nAverage Epipolar Error for inliers:", error)
     else:
         print("Failed to find enough inliers using RANSAC")
 
@@ -1159,107 +1267,116 @@ def main():
     Rs,Cs = ExtractCameraPose(E)
 
     # Disambiguate camera pose using cheirality check
-    R_best, C_best, X_best, valid_indices = DisambiguateCameraPose(Rs, Cs, K, inlier_points1, inlier_points2)
+    R1, C1, X1, valid_indices = DisambiguateCameraPose(Rs, Cs, K, inlier_points1, inlier_points2)
     
     # Extract valid points
     valid_points1 = inlier_points1[valid_indices]
     valid_points2 = inlier_points2[valid_indices]
     valid_line_numbers = [inlier_lines[i] for i in valid_indices]
     
-    print(f"Final reconstruction has {len(valid_indices)} valid 3D points")
-    X_initial = X_best[valid_indices]
+    X_initial = X1[valid_indices]
 
 
     initial_error = calculate_mean_reprojection_error(
         X_initial,
         K,
         np.eye(3), np.zeros(3),  # First camera is at origin
-        R_best, C_best,
+        R1, C1,
         valid_points1,
         valid_points2
     )
 
-    print(f"Mean reprojection error before optimization: {initial_error:.4f} pixels")
 
-    X_refined = NonLinearTriangulation(
+    X1_refined = NonLinearTriangulation(
     K,
     np.eye(3), np.zeros(3),  # First camera is at origin
-    R_best, C_best,
+    R1, C1,
     valid_points1,
     valid_points2,
-    X_best[valid_indices])
+    X_initial 
+)
 
     final_error = calculate_mean_reprojection_error(
-            X_refined,
+            X1_refined,
             K,
             np.eye(3), np.zeros(3),
-            R_best, C_best,
+            R1, C1,
             valid_points1,
             valid_points2
         )
-    print(f"Mean reprojection error after optimization: {final_error:.4f} pixels")
 
-    # VisualizeReconstruction(X_best[valid_indices], R_best, C_best) 
-    # VisualizeReconstructionComparison(X_initial, X_refined, R_best, C_best)
-    # VisualizeXZPlaneViewInitial(X_initial, R_best, C_best)
-    # VisualizeXZPlaneView(X_initial, X_refined, R_best, C_best) 
+    Rset.append(R1)
+    Cset.append(C1)
+    Xset.append(X1_refined)
 
     VisualizeImagePoints(
     valid_points1, valid_points2,  # Original 2D points
     K,                            # Camera calibration
     np.eye(3), np.zeros(3),      # First camera pose
-    R_best, C_best,              # Second camera pose
+    R1, C1,              # Second camera pose
     X_initial,                    # 3D points from linear triangulation
-    X_refined,                    # 3D points from non-linear optimization
+    X1_refined,                    # 3D points from non-linear optimization
     image1_path,                # Path to first image
     image2_path                 # Path to second image
 )
-    
-    # PnP from camera 3
 
-    # Load 3D points
-    points_3d, points_2d = get_pnp_correspondences(
+    R_dict = {}
+    C_dict = {}
+
+    for i in range(3, 6):
+    
+        points_3d, points_2d = get_pnp_correspondences(
         'matching1.txt',  # matches between image 2 and 3
         1,               # reference image ID (image 2)
-        4,               # new image ID
-        X_refined,       # refined 3D points
-        valid_line_numbers  # line numbers from initial reconstruction
-    )
+        i,               # new image ID
+        X1_refined,       # refined 3D points
+        valid_line_numbers  )
+
+
+        if len(points_2d) >= 6:  # Minimum points needed for PnP
+            R_, C_ = LinearPnP(K, points_3d, points_2d)
+
+            inliers_pnp,R0,C0 = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.1)
+
+        
+
+        inlier_indices = np.array(list(inliers_pnp))
+        # inlier_points = X1_refined[inlier_indices] 
+        inlier_points_3d = points_3d[inlier_indices]
+        inlier_points_2d = points_2d[inlier_indices]
+
+
+        # Refine camera pose using non-linear optimization
+        R_dict[i], C_dict[i] = NonlinearPnP(K, R0, C0, inlier_points_3d, inlier_points_2d)
+        
+        reprojected_points_refined = project_3d_to_2d(inlier_points_3d, K, R_dict[i], C_dict[i])
+
+        # Visualize reprojection on an image
+        visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
+        
+        pts1, pts2, line_num = read_matches_file(matches_file, image_id1, i)
+
+        print(len(pts1))
+        X0, valid_id = LinearTriangulation(K, np.zeros((3, 1)), np.eye(3), C_dict[i], R_dict[i], pts1, pts2)
+
+        print(len(valid_id))
+        X0_refined = NonLinearTriangulation(
+        K,
+        np.eye(3), np.zeros((3,1)),  # First camera is at origin
+        R_dict[i], C_dict[i],
+        pts1[valid_id],
+        pts2[valid_id],
+        X0[valid_id])
+
+        print(len(X0_refined))
+
+        Rset.append(R_dict[i])
+        Cset.append(C_dict[i])
+        Xset.append(X0_refined)
+
+        # print(len(X0_refined)) 
+        VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
-    # Now you can use these correspondences for PnP
-    if len(points_2d) >= 6:  # Minimum points needed for PnP
-        R3, C3 = LinearPnP(K, points_3d, points_2d)
-        # Optional: Run PnP RANSAC
-        inliers,R3new,C3new = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.1)
-
-    # Visualize the 3D reconstruction with camera 3
-    #VisualizeReconstruction(X_refined, R3, C3)
-
-    #print("Number of inliers:", len(inliers))
-    print(f"Best model has {len(inliers)} inliers out of {len(points_3d)} total points")
-
-
-    # Visualize the 3D reconstruction with camera 3
-    inlier_indices = np.array(list(inliers))
-    inlier_points = X_refined[inlier_indices]
-    VisualizeXZPlaneViewInitial(inlier_points, R3new, C3new)
-
-    # Project the 3D points into the image plane
-    reprojected_points = project_3d_to_2d(points_3d, K, R3new, C3new)
-
-    # Visualize reprojection on an image
-    visualize_reprojection('4.png ', points_2d, reprojected_points)
-
-    # Refine camera pose using non-linear optimization
-    R3_refined, C3_refined = NonlinearPnP(K, R3new, C3new, points_3d, points_2d)
-
-    # Project the 3D points into the image plane
-    reprojected_points_refined = project_3d_to_2d(points_3d, K, R3_refined, C3_refined)
-
-    # Visualize reprojection on an image
-    visualize_reprojection('4.png', points_2d, reprojected_points_refined)
-
-
-
+    VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
 if __name__ == "__main__":
     main()
