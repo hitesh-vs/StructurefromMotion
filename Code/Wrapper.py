@@ -1227,6 +1227,39 @@ def NonlinearPnP(K, R, C, points_3d, points_2d):
 
     return R_new, C_new
 
+def flatten_list(nested_list):
+    return [item for sublist in nested_list for item in sublist]
+
+def BuildVisibilityMatrix(K,Rset,Cset,Xset):
+
+    visibility_matrix = np.zeros((len(Rset),len(Xset)))
+    for i in range(len(Rset)):
+        R = Rset[i]
+        C = Cset[i]
+
+        points_2d = project_3d_to_2d(Xset, K, R, C)
+
+        # check if points are within image bounds
+        # row = np.zeros((1,len(Xset)))
+        row = []
+        n_1 = 0
+        n_0 = 0
+        # each image is (600, 800, 3)
+        for j in range(len(points_2d)):
+            x = points_2d[j][0]
+            y = points_2d[j][1]
+
+            if x >= 0 and x < 800 and y >= 0 and y < 600:
+                row.append(1)
+                n_1 += 1
+            else:
+                row.append(0)
+                n_0 += 1
+        print(f"Image {i+2} has {n_1} points within bounds and {n_0} points outside bounds")
+        visibility_matrix[i] = row
+    
+    return visibility_matrix
+        
 
 def main():
     # Example usage with your matches.txt file
@@ -1241,7 +1274,7 @@ def main():
     Cset = []
     Xset = []
 
-    # Parse matching points
+    # Parse matching points between image 1 and 2
     points1, points2, line_numbers = read_matches_file(matches_file, image_id1, image_id2)
     
     if len(points1) < 8:
@@ -1377,6 +1410,25 @@ def main():
         # print(len(X0_refined)) 
         VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
-    VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
+    # VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
+    all_points = flatten_list(Xset)
+
+    all_points_3d = np.asarray(all_points, dtype=np.float32)
+    
+    # OpenCV's projectPoints expects 3D points with shape (n, 1, 3) or (n, 3)
+    # Check and reshape if needed
+    if all_points_3d.ndim == 2 and all_points_3d.shape[1] == 3:
+        # Already in (n, 3) format, which is fine
+        pass
+    else:
+        # Try to reshape to correct format
+        try:
+            all_points_3d = all_points_3d.reshape(-1, 3)
+        except:
+            raise ValueError("points_3d must be convertible to shape (n, 3)")
+    visibility_matrix = BuildVisibilityMatrix(K,Rset,Cset,all_points_3d)
+
+    
+
 if __name__ == "__main__":
     main()
