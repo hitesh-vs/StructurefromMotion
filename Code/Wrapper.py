@@ -1232,12 +1232,29 @@ def flatten_list(nested_list):
 
 def BuildVisibilityMatrix(K,Rset,Cset,Xset):
 
-    visibility_matrix = np.zeros((len(Rset),len(Xset)))
+    all_points = flatten_list(Xset)
+
+    all_points_3d = np.asarray(all_points, dtype=np.float32)
+    
+    # OpenCV's projectPoints expects 3D points with shape (n, 1, 3) or (n, 3)
+    # Check and reshape if needed
+    if all_points_3d.ndim == 2 and all_points_3d.shape[1] == 3:
+        # Already in (n, 3) format, which is fine
+        pass
+    else:
+        # Try to reshape to correct format
+        try:
+            all_points_3d = all_points_3d.reshape(-1, 3)
+        except:
+            raise ValueError("points_3d must be convertible to shape (n, 3)")
+
+    visibility_matrix = np.zeros((len(Rset),len(all_points_3d)))
+
     for i in range(len(Rset)):
         R = Rset[i]
         C = Cset[i]
 
-        points_2d = project_3d_to_2d(Xset, K, R, C)
+        points_2d = project_3d_to_2d(all_points_3d, K, R, C)
 
         # check if points are within image bounds
         # row = np.zeros((1,len(Xset)))
@@ -1356,6 +1373,9 @@ def main():
     R_dict = {}
     C_dict = {}
 
+    all_points_2d = [None, None, None, None]
+    all_points_2d[0] = valid_points2
+
     for i in range(3, 6):
     
         points_3d, points_2d = get_pnp_correspondences(
@@ -1392,6 +1412,9 @@ def main():
         print(len(pts1))
         X0, valid_id = LinearTriangulation(K, np.zeros((3, 1)), np.eye(3), C_dict[i], R_dict[i], pts1, pts2)
 
+        k = i - 2
+        all_points_2d[k] = pts2[valid_id]
+
         print(len(valid_id))
         X0_refined = NonLinearTriangulation(
         K,
@@ -1411,22 +1434,9 @@ def main():
         VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
     # VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
-    all_points = flatten_list(Xset)
 
-    all_points_3d = np.asarray(all_points, dtype=np.float32)
     
-    # OpenCV's projectPoints expects 3D points with shape (n, 1, 3) or (n, 3)
-    # Check and reshape if needed
-    if all_points_3d.ndim == 2 and all_points_3d.shape[1] == 3:
-        # Already in (n, 3) format, which is fine
-        pass
-    else:
-        # Try to reshape to correct format
-        try:
-            all_points_3d = all_points_3d.reshape(-1, 3)
-        except:
-            raise ValueError("points_3d must be convertible to shape (n, 3)")
-    visibility_matrix = BuildVisibilityMatrix(K,Rset,Cset,all_points_3d)
+    visibility_matrix = BuildVisibilityMatrix(K,Rset,Cset,Xset)
 
     
 
