@@ -114,16 +114,30 @@ def bundle_adjustment(points_3d, observations, K, Rset, Cset, camera_indices, po
     
     # Define the sparsity structure of the Jacobian matrix
     A = build_jacobian_sparsity(n_cameras, n_points, camera_indices, point_indices)
-    
-    # Define the objective function (sum of squared reprojection errors)
+
     def objective(params):
-        return reprojection_error(params, n_cameras, n_points, K, camera_indices, 
-                                 point_indices, observations, visibility)
-    
-    # Perform the optimization
-    print(f"Starting optimization with {n_cameras} cameras and {n_points} points...")
+        residuals = reprojection_error(params, n_cameras, n_points, K, camera_indices, point_indices, observations, visibility)
+        # Apply robust cost function (e.g., Cauchy loss)
+        cauchy_delta = 1.0
+        robust_residuals = cauchy_loss(residuals, cauchy_delta)
+        return robust_residuals
+
+    def cauchy_loss(residuals, delta):
+        return np.log(1 + (residuals / delta) ** 2)
+
+    # Adjust optimization parameters
     result = least_squares(objective, x0, jac_sparsity=A, verbose=2, x_scale='jac',
-                          method='trf', ftol=1e-8, max_nfev=1000)
+                        method='trf', ftol=1e-10, xtol=1e-10, max_nfev=2000)
+    
+    # # Define the objective function (sum of squared reprojection errors)
+    # def objective(params):
+    #     return reprojection_error(params, n_cameras, n_points, K, camera_indices, 
+    #                              point_indices, observations, visibility)
+    
+    # # Perform the optimization
+    # print(f"Starting optimization with {n_cameras} cameras and {n_points} points...")
+    # result = least_squares(objective, x0, jac_sparsity=A, verbose=2, x_scale='jac',
+    #                       method='trf', ftol=1e-8, max_nfev=1000)
     
     # Extract the refined parameters
     refined_params = result.x
@@ -146,6 +160,8 @@ def bundle_adjustment(points_3d, observations, K, Rset, Cset, camera_indices, po
         refined_Cset.append(C)
     
     return refined_points_3d, refined_Rset, refined_Cset
+
+
 
 def build_jacobian_sparsity(n_cameras, n_points, camera_indices, point_indices):
     """
