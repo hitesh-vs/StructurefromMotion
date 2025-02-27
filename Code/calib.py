@@ -25,7 +25,7 @@ def BundleAdjustment(K, Rset, Cset, points_3d, points_2d, visibility_matrix):
     
     # Convert inputs to numpy arrays if they aren't already
     points_3d = np.asarray(points_3d)
-    points_2d = np.asarray(points_2d)
+    # points_2d = np.asarray(points_2d) 
     visibility_matrix = np.asarray(visibility_matrix)
     
     n_cameras = len(Rset)
@@ -34,18 +34,27 @@ def BundleAdjustment(K, Rset, Cset, points_3d, points_2d, visibility_matrix):
     print(f"Number of cameras: {n_cameras}")
     print(f"Number of 3D points: {n_points}")
     
-    # Generate camera indices, point indices, and observations from visibility matrix
+ # Generate camera indices, point indices, and observations from visibility matrix
     camera_indices = []
     point_indices = []
     observations = []
     
-    # For each point and each camera that sees it
-    for j in range(n_points):  # For each 3D point
-        for i in range(n_cameras):  # For each camera
-            if visibility_matrix[i, j] == 1:  # If camera i sees point j
+    # For each camera and each point visible in that camera
+    for i in range(n_cameras):  # For each camera
+        if points_2d[i] is None:  # Skip cameras with no 2D points
+            continue
+            
+        # Assuming points_2d[i] is a list/array of 2D points visible in camera i
+        # and that there's a way to map from this list to the global 3D point indices
+        for local_idx, point_2d in enumerate(points_2d[i]):
+            # You need a way to map local_idx to the global 3D point index
+            # This depends on how your data is structured
+            global_point_idx = local_idx  # This mapping needs to be adjusted!
+            
+            if global_point_idx < n_points and visibility_matrix[i, global_point_idx] == 1:
                 camera_indices.append(i)
-                point_indices.append(j)
-                observations.append(points_2d[j])  # Use the reference 2D point
+                point_indices.append(global_point_idx)
+                observations.append(point_2d)
     
     camera_indices = np.array(camera_indices)
     point_indices = np.array(point_indices)
@@ -114,7 +123,7 @@ def bundle_adjustment(points_3d, observations, K, Rset, Cset, camera_indices, po
     # Perform the optimization
     print(f"Starting optimization with {n_cameras} cameras and {n_points} points...")
     result = least_squares(objective, x0, jac_sparsity=A, verbose=2, x_scale='jac',
-                          method='trf', ftol=1e-5, max_nfev=100)
+                          method='trf', ftol=1e-8, max_nfev=1000)
     
     # Extract the refined parameters
     refined_params = result.x
