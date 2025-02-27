@@ -4,6 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
+from calib import BundleAdjustment
 
 
 def read_matches_file(filename, image_id1, image_id2):
@@ -783,7 +784,100 @@ def VisualizeXZPlaneViewComplete(Xset_list, Rset, Cset, image_paths=None):
     plt.show()
 
 
-
+def VisualizeFinalReconstruction(X_points, Rset, Cset, image_paths=None):
+    """
+    Visualize the XZ plane view of the complete 3D reconstruction with multiple cameras.
+    
+    Args:
+        X_points: Array of shape (N, 3) containing all 3D points from the complete reconstruction
+        Rset: List of rotation matrices for cameras 2, 3, 4, 5
+        Cset: List of camera center positions for cameras 2, 3, 4, 5
+        image_paths: Optional list of image file names for labeling
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    import numpy as np
+    
+    # Create the figure
+    plt.figure(figsize=(4.5, 6))
+    
+    # Plot all 3D points
+    plt.scatter(X_points[:, 0], X_points[:, 2], 
+              c='cyan', marker='.', s=10, alpha=0.6,
+              label='3D Points')
+    
+    # Plot camera 1 at the origin
+    plt.scatter(0, 0, c='black', marker='o', s=150, label='Camera 1 (Reference)')
+    
+    # Draw camera 1 orientation
+    plt.arrow(0, 0, 0.5, 0, head_width=0.1, head_length=0.1, fc='black', ec='black', alpha=0.7)
+    plt.arrow(0, 0, 0, 0.5, head_width=0.1, head_length=0.1, fc='black', ec='black', alpha=0.7)
+    
+    # Plot cameras 2-5 with orientation vectors
+    camera_colors = ['red', 'green', 'blue', 'purple']
+    
+    for i, (R, C) in enumerate(zip(Rset, Cset)):
+        # Flatten camera center to get coordinates
+        C_pos = C.flatten()
+        
+        # Label for the camera
+        camera_label = f'Camera {i+2}'
+        if image_paths and (i+1) < len(image_paths):
+            camera_label = f'Camera {i+2} ({image_paths[i+1].split("/")[-1]})'
+        
+        # Plot the camera
+        plt.scatter(C_pos[0], C_pos[2], c=camera_colors[i % len(camera_colors)], 
+                   marker='o', s=150, label=camera_label)
+        
+        # Draw x-axis orientation
+        plt.arrow(C_pos[0], C_pos[2], 
+                 R[0, 0]*0.5, R[2, 0]*0.5, 
+                 head_width=0.1, head_length=0.1, 
+                 fc=camera_colors[i % len(camera_colors)], 
+                 ec=camera_colors[i % len(camera_colors)], alpha=0.7)
+        
+        # Draw z-axis orientation (principal axis of the camera)
+        plt.arrow(C_pos[0], C_pos[2], 
+                 R[0, 2]*0.5, R[2, 2]*0.5, 
+                 head_width=0.1, head_length=0.1, 
+                 fc=camera_colors[i % len(camera_colors)], 
+                 ec=camera_colors[i % len(camera_colors)], alpha=0.7)
+        
+        # Add text label next to the camera
+        plt.text(C_pos[0]+0.1, C_pos[2]+0.1, f'C{i+2}', fontsize=12, 
+                color=camera_colors[i % len(camera_colors)])
+    
+    # Set plot properties
+    plt.xlabel('X Axis', fontsize=14)
+    plt.ylabel('Z Axis', fontsize=14)
+    plt.title('Complete 3D Reconstruction - XZ Plane View', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    
+    # Add a legend with smaller markers for better visibility
+    plt.legend(loc='upper right', markerscale=2)
+    
+    # Determine appropriate axis limits based on both cameras and points
+    all_cameras = np.vstack([np.zeros(3)] + [C.flatten() for C in Cset])
+    
+    # Calculate min/max for X and Z coordinates
+    min_x = min(np.min(X_points[:, 0]), np.min(all_cameras[:, 0]))
+    max_x = max(np.max(X_points[:, 0]), np.max(all_cameras[:, 0]))
+    min_z = min(np.min(X_points[:, 2]), np.min(all_cameras[:, 2]))
+    max_z = max(np.max(X_points[:, 2]), np.max(all_cameras[:, 2]))
+    
+    # Add some padding
+    padding_x = (max_x - min_x) * 0.1
+    padding_z = (max_z - min_z) * 0.1
+    
+    plt.xlim(min_x - padding_x, max_x + padding_x)
+    plt.ylim(min_z - padding_z, max_z + padding_z)
+    
+    # Alternatively, you can use fixed limits if preferred
+    # plt.xlim(-7.5, 10)
+    # plt.ylim(-5, 20)
+    
+    plt.tight_layout()
+    plt.show()
     
 
 # Uncomment to run the example
@@ -1359,16 +1453,16 @@ def main():
     Cset.append(C1)
     Xset.append(X1_refined)
 
-    VisualizeImagePoints(
-    valid_points1, valid_points2,  # Original 2D points
-    K,                            # Camera calibration
-    np.eye(3), np.zeros(3),      # First camera pose
-    R1, C1,              # Second camera pose
-    X_initial,                    # 3D points from linear triangulation
-    X1_refined,                    # 3D points from non-linear optimization
-    image1_path,                # Path to first image
-    image2_path                 # Path to second image
-)
+#     VisualizeImagePoints(
+#     valid_points1, valid_points2,  # Original 2D points
+#     K,                            # Camera calibration
+#     np.eye(3), np.zeros(3),      # First camera pose
+#     R1, C1,              # Second camera pose
+#     X_initial,                    # 3D points from linear triangulation
+#     X1_refined,                    # 3D points from non-linear optimization
+#     image1_path,                # Path to first image
+#     image2_path                 # Path to second image
+# )
 
     R_dict = {}
     C_dict = {}
@@ -1405,7 +1499,7 @@ def main():
         reprojected_points_refined = project_3d_to_2d(inlier_points_3d, K, R_dict[i], C_dict[i])
 
         # Visualize reprojection on an image
-        visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
+        # visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
         
         pts1, pts2, line_num = read_matches_file(matches_file, image_id1, i)
 
@@ -1431,14 +1525,30 @@ def main():
         Xset.append(X0_refined)
 
         # print(len(X0_refined)) 
-        VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
+        # VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
     # VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
 
-    
+    pts_flat = flatten_list(all_points_2d)
+    all_points = flatten_list(Xset)
+    #print(pts_flat.shape)
+  
     visibility_matrix = BuildVisibilityMatrix(K,Rset,Cset,Xset)
+    # print(Rset)
+    # print(Cset)
+    refined_points, refined_Rset, refined_Cset = BundleAdjustment(K,Rset,Cset,all_points,all_points_2d,visibility_matrix)
 
-    
+    # print("Again")
 
+    # refined_points, refined_Rset, refined_Cset = BundleAdjustment(
+    #     K, Rset, Cset, all_points, all_points_2d, visibility_matrix,
+    #     method='trf',
+    #     max_iterations=1000,
+    #     ftol=1e-10,
+    #     outlier_threshold=5.0,  # Stricter outlier rejection
+    #     regularization_weight=0.005  # Adjust based on your data scale
+    # )
+    # refined_points1, refined_Rset1, refined_Cset1 = BundleAdjustment(K,refined_Rset,refined_Cset,refined_points,all_points_2d,visibility_matrix)
+    # VisualizeFinalReconstruction(refined_points, refined_Rset, refined_Cset) 
 if __name__ == "__main__":
     main()
