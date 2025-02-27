@@ -4,6 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
+from scipy.spatial.transform import Rotation 
 from calib import BundleAdjustment
 
 
@@ -803,7 +804,7 @@ def VisualizeFinalReconstruction(X_points, Rset, Cset, image_paths=None):
     
     # Plot all 3D points
     plt.scatter(X_points[:, 0], X_points[:, 2], 
-              c='cyan', marker='.', s=10, alpha=0.6,
+              c='red', marker='.', s=10, alpha=0.6,
               label='3D Points')
     
     # Plot camera 1 at the origin
@@ -873,8 +874,8 @@ def VisualizeFinalReconstruction(X_points, Rset, Cset, image_paths=None):
     plt.ylim(min_z - padding_z, max_z + padding_z)
     
     # Alternatively, you can use fixed limits if preferred
-    # plt.xlim(-7.5, 10)
-    # plt.ylim(-5, 20)
+    plt.xlim(-20, 20)
+    plt.ylim(-5, 25)
     
     plt.tight_layout()
     plt.show()
@@ -1053,6 +1054,7 @@ def LinearPnP(K, X, x):
     # Enforce orthonormality on R
     U, S, Vh = np.linalg.svd(R)
     R = U @ Vh
+    t = t/S[0]
     
     # Ensure proper rotation matrix (det(R) = 1)
     if np.linalg.det(R) < 0:
@@ -1140,6 +1142,23 @@ def PnPRANSAC(X, x, K, epsilon_threshold=0.0001, M=2000, N=None,seed=42):
     print(f"Found {len(best_S)} inliers out of {N} points")
     
     return best_S, best_R, best_C
+
+# Quaternion and Other Rotation transformations for non lin PnP
+def getQuaternion(R2):
+    Q = Rotation.from_matrix(R2)
+    return Q.as_quat()
+
+def getEuler(R2):
+    euler = Rotation.from_matrix(R2)
+    return euler.as_rotvec()
+
+def getRotation(Q, type_ = 'q'):
+    if type_ == 'q':
+        R = Rotation.from_quat(Q)
+        return R.as_matrix()
+    elif type_ == 'e':
+        R = Rotation.from_rotvec(Q)
+        return R.as_matrix()
 
 def get_pnp_correspondences(matches_file, ref_image_id, new_image_id, reference_points, valid_line_numbers):
     """
@@ -1270,57 +1289,88 @@ def visualize_reprojection(image_path, detected_points, reprojected_points):
     plt.axis("off")
     plt.show()
 
-def NonlinearPnP(K, R, C, points_3d, points_2d):
+def NonlinearPnP(K, R_init, C_init, points_3d, points_2d):
     """
     Refine camera pose using non-linear optimization to minimize reprojection error 
 
     Args:           
         K: Camera calibration matrix (3,3)
-        R, C: Initial camera pose
+        R_init, C_init: Initial camera pose
         points_3d: 3D points
         points_2d: 2D points
     
     Returns:
         R_new, C_new: Refined camera pose
     """
-    # Convert 3D points to homogeneous coordinates
-    points  = np.hstack((points_3d, np.ones((len(points_3d), 1))))
-
+    # Convert rotation matrix to Rodrigues vector
+    r_vec, _ = cv2.Rodrigues(R_init)
+    r_vec = r_vec.flatten()
+    
+    # Initial translation vector (negative of R*C)
+    t_vec = -R_init @ C_init
+    t_vec = t_vec.flatten()  # Ensure t_vec is flattened
+    
+    # Initial parameters
+    params = np.concatenate([r_vec, t_vec])
+    
     # Define the objective function
     def objective(params):
         # Extract rotation and translation parameters
-        R_new = params[:9].reshape(3, 3)
-        C_new = params[9:]
+        r = params[:3]
+        t = params[3:].reshape(3, 1)
         
-        # Compute projection matrix
-        P = K @ np.hstack([R_new, -R_new @ C_new.reshape(3, 1)])
+        # Convert rotation vector back to matrix
+        R, _ = cv2.Rodrigues(r)
         
-        # Project 3D points
-        projected_points = np.dot(P, points.T).T
-        projected_points = projected_points[:, :2] / projected_points[:, 2, None]
+        # Project 3D points to 2D
+        projected_points = []
+        for point_3d in points_3d:
+            # Ensure point_3d is properly shaped
+            point_3d = point_3d.reshape(3, 1) if point_3d.ndim == 1 else point_3d
+            
+            # Convert to camera coordinates
+            point_cam = R @ point_3d + t
+            
+            # Project to image plane
+            point_img = K @ point_cam
+            point_img = point_img / point_img[2]
+            
+            # Only append the x,y coordinates (first 2 elements)
+            projected_points.append(point_img[:2].flatten())
+        
+        projected_points = np.array(projected_points)
         
         # Calculate reprojection error
         error = points_2d - projected_points
         
         return error.flatten()
     
-    # Initial guess for parameters
-    params = np.hstack([R.flatten(), C])
-
     # Use least_squares to minimize reprojection error
     result = least_squares(
         objective,
         params,
-        method='lm',  # Levenberg-Marquardt algorithm
-        max_nfev=100   # Maximum number of function evaluations
+        method='trf',  # Trust Region Reflective algorithm
+        loss='huber',  # Robust loss function to handle outliers
+        max_nfev=1000,  # Maximum number of function evaluations
+        verbose=0
     )
-
+    
     # Extract refined parameters
-    R_new = result.x[:9].reshape(3, 3)
-    C_new = result.x[9:]
-
-    return R_new, C_new
-
+    r_refined = result.x[:3]
+    t_refined = result.x[3:]
+    
+    # Convert rotation vector to matrix
+    R_refined, _ = cv2.Rodrigues(r_refined)
+    
+    # Calculate camera center (C = -R^T * t)
+    C_refined = -R_refined.T @ t_refined.reshape(3, 1)
+    
+    # Calculate and print mean reprojection error
+    errors = result.fun.reshape(-1, 2)
+    mean_error = np.mean(np.sqrt(np.sum(errors**2, axis=1)))
+    print(f"Mean reprojection error after NonlinearPnP: {mean_error:.3f} pixels")
+    
+    return R_refined, C_refined.flatten() 
 def flatten_list(nested_list):
     return [item for sublist in nested_list for item in sublist]
 
@@ -1370,6 +1420,50 @@ def BuildVisibilityMatrix(K,Rset,Cset,Xset):
         visibility_matrix[i] = row
     
     return visibility_matrix
+
+# Add this function to filter 3D points and their corresponding 2D projections
+def filter_points_by_range(all_points, all_points_2d, x_range=(-20, 20), z_range=(-5, 25)):
+    """
+    Filter 3D points to only include those within specified ranges for x and z coordinates.
+    Also removes the corresponding 2D points from all_points_2d.
+    
+    Args:
+        all_points: List of 3D points
+        all_points_2d: List of corresponding 2D points across multiple views
+        x_range: Tuple of (min_x, max_x)
+        z_range: Tuple of (min_z, max_z)
+        
+    Returns:
+        filtered_points: Filtered 3D points
+        filtered_points_2d: Filtered 2D points
+    """
+    # Convert to numpy array if not already
+    points_array = np.array(all_points)
+    
+    # Create a mask for points within the range
+    x_mask = (points_array[:, 0] >= x_range[0]) & (points_array[:, 0] <= x_range[1])
+    z_mask = (points_array[:, 2] >= z_range[0]) & (points_array[:, 2] <= z_range[1])
+    valid_mask = x_mask & z_mask
+    
+    # Filter 3D points
+    filtered_points = points_array[valid_mask]
+    
+    # Filter 2D points in each view
+    filtered_points_2d = []
+    for view_points in all_points_2d:
+        if view_points is not None:
+            view_points_array = np.array(view_points)
+            filtered_view_points = view_points_array[valid_mask[:len(view_points_array)]] if len(view_points_array) > 0 else np.array([])
+            filtered_points_2d.append(filtered_view_points)
+        else:
+            filtered_points_2d.append(None)
+    
+    # Print statistics for debugging
+    print(f"Total points: {len(points_array)}")
+    print(f"Points within range: {len(filtered_points)}")
+    print(f"Removed {len(points_array) - len(filtered_points)} outlier points")
+    
+    return filtered_points, filtered_points_2d
         
 
 def main():
@@ -1464,10 +1558,12 @@ def main():
 #     image2_path                 # Path to second image
 # )
 
+    VisualizeXZPlaneViewInitial(X1_refined, R1, C1)
+
     R_dict = {}
     C_dict = {}
 
-    all_points_2d = [None, None, None, None]
+    all_points_2d = [None,None,None,None]
     all_points_2d[0] = valid_points2
 
     for i in range(3, 6):
@@ -1481,9 +1577,9 @@ def main():
 
 
         if len(points_2d) >= 6:  # Minimum points needed for PnP
-            R_, C_ = LinearPnP(K, points_3d, points_2d)
+            #R_, C_ = LinearPnP(K, points_3d, points_2d)
 
-            inliers_pnp,R0,C0 = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.1)
+            inliers_pnp,R0,C0 = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.05)
 
         
 
@@ -1499,9 +1595,16 @@ def main():
         reprojected_points_refined = project_3d_to_2d(inlier_points_3d, K, R_dict[i], C_dict[i])
 
         # Visualize reprojection on an image
-        # visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
+        visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
         
         pts1, pts2, line_num = read_matches_file(matches_file, image_id1, i)
+
+        # Get inliners from these matches
+        _,pts1_idx,lines = GetInlierRANSANC(pts1, pts2, line_num,num_iterations=1000, threshold=0.5)
+
+        if len(pts1_idx) >= 8:
+            pts1 = pts1[pts1_idx]
+            pts2 = pts2[pts1_idx]
 
         print(len(pts1))
         X0, valid_id = LinearTriangulation(K, np.zeros((3, 1)), np.eye(3), C_dict[i], R_dict[i], pts1, pts2)
@@ -1525,13 +1628,21 @@ def main():
         Xset.append(X0_refined)
 
         # print(len(X0_refined)) 
-        # VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
+        VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
     # VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
+
+    print(Rset)
 
     pts_flat = flatten_list(all_points_2d)
     all_points = flatten_list(Xset)
     #print(pts_flat.shape)
+
+    #Removing points outside the range
+    #all_points,all_points_2d = filter_points_by_range(all_points, all_points_2d, x_range=(-20, 20), z_range=(-5, 25))
+
+    # Visualise before BA
+    VisualizeFinalReconstruction(np.array(all_points), Rset, Cset)
   
     visibility_matrix = BuildVisibilityMatrix(K,Rset,Cset,Xset)
     # print(Rset)
@@ -1548,7 +1659,7 @@ def main():
     #     outlier_threshold=5.0,  # Stricter outlier rejection
     #     regularization_weight=0.005  # Adjust based on your data scale
     # )
-    # refined_points1, refined_Rset1, refined_Cset1 = BundleAdjustment(K,refined_Rset,refined_Cset,refined_points,all_points_2d,visibility_matrix)
-    # VisualizeFinalReconstruction(refined_points, refined_Rset, refined_Cset) 
+    #refined_points1, refined_Rset1, refined_Cset1 = BundleAdjustment(K,refined_Rset,refined_Cset,refined_points,all_points_2d,visibility_matrix)
+    VisualizeFinalReconstruction(refined_points, refined_Rset, refined_Cset) 
 if __name__ == "__main__":
     main()
