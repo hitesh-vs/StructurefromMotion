@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
 from scipy.spatial.transform import Rotation 
-from calib import BundleAdjustment
+#from calib import BundleAdjustment
+from BundleAdjustment import BundleAdjustment, BuildVisibilityMatrix
 
 
 def read_matches_file(filename, image_id1, image_id2):
@@ -1374,52 +1375,52 @@ def NonlinearPnP(K, R_init, C_init, points_3d, points_2d):
 def flatten_list(nested_list):
     return [item for sublist in nested_list for item in sublist]
 
-def BuildVisibilityMatrix(K,Rset,Cset,Xset):
+# def BuildVisibilityMatrix(K,Rset,Cset,Xset):
 
-    all_points = flatten_list(Xset)
+#     all_points = flatten_list(Xset)
 
-    all_points_3d = np.asarray(all_points, dtype=np.float32)
+#     all_points_3d = np.asarray(all_points, dtype=np.float32)
     
-    # OpenCV's projectPoints expects 3D points with shape (n, 1, 3) or (n, 3)
-    # Check and reshape if needed
-    if all_points_3d.ndim == 2 and all_points_3d.shape[1] == 3:
-        # Already in (n, 3) format, which is fine
-        pass
-    else:
-        # Try to reshape to correct format
-        try:
-            all_points_3d = all_points_3d.reshape(-1, 3)
-        except:
-            raise ValueError("points_3d must be convertible to shape (n, 3)")
+#     # OpenCV's projectPoints expects 3D points with shape (n, 1, 3) or (n, 3)
+#     # Check and reshape if needed
+#     if all_points_3d.ndim == 2 and all_points_3d.shape[1] == 3:
+#         # Already in (n, 3) format, which is fine
+#         pass
+#     else:
+#         # Try to reshape to correct format
+#         try:
+#             all_points_3d = all_points_3d.reshape(-1, 3)
+#         except:
+#             raise ValueError("points_3d must be convertible to shape (n, 3)")
 
-    visibility_matrix = np.zeros((len(Rset),len(all_points_3d)))
+#     visibility_matrix = np.zeros((len(Rset),len(all_points_3d)))
 
-    for i in range(len(Rset)):
-        R = Rset[i]
-        C = Cset[i]
+#     for i in range(len(Rset)):
+#         R = Rset[i]
+#         C = Cset[i]
 
-        points_2d = project_3d_to_2d(all_points_3d, K, R, C)
+#         points_2d = project_3d_to_2d(all_points_3d, K, R, C)
 
-        # check if points are within image bounds
-        # row = np.zeros((1,len(Xset)))
-        row = []
-        n_1 = 0
-        n_0 = 0
-        # each image is (600, 800, 3)
-        for j in range(len(points_2d)):
-            x = points_2d[j][0]
-            y = points_2d[j][1]
+#         # check if points are within image bounds
+#         # row = np.zeros((1,len(Xset)))
+#         row = []
+#         n_1 = 0
+#         n_0 = 0
+#         # each image is (600, 800, 3)
+#         for j in range(len(points_2d)):
+#             x = points_2d[j][0]
+#             y = points_2d[j][1]
 
-            if x >= 0 and x < 800 and y >= 0 and y < 600:
-                row.append(1)
-                n_1 += 1
-            else:
-                row.append(0)
-                n_0 += 1
-        print(f"Image {i+2} has {n_1} points within bounds and {n_0} points outside bounds")
-        visibility_matrix[i] = row
+#             if x >= 0 and x < 800 and y >= 0 and y < 600:
+#                 row.append(1)
+#                 n_1 += 1
+#             else:
+#                 row.append(0)
+#                 n_0 += 1
+#         print(f"Image {i+2} has {n_1} points within bounds and {n_0} points outside bounds")
+#         visibility_matrix[i] = row
     
-    return visibility_matrix
+#     return visibility_matrix
 
 # Add this function to filter 3D points and their corresponding 2D projections
 def filter_points_by_range(all_points, all_points_2d, x_range=(-20, 20), z_range=(-5, 25)):
@@ -1579,7 +1580,7 @@ def main():
         if len(points_2d) >= 6:  # Minimum points needed for PnP
             #R_, C_ = LinearPnP(K, points_3d, points_2d)
 
-            inliers_pnp,R0,C0 = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.05)
+            inliers_pnp,R0,C0 = PnPRANSAC(points_3d, points_2d, K, epsilon_threshold=0.1)
 
         
 
@@ -1595,12 +1596,12 @@ def main():
         reprojected_points_refined = project_3d_to_2d(inlier_points_3d, K, R_dict[i], C_dict[i])
 
         # Visualize reprojection on an image
-        visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
+        #visualize_reprojection(f'{i}.png', inlier_points_2d, reprojected_points_refined)
         
         pts1, pts2, line_num = read_matches_file(matches_file, image_id1, i)
 
         # Get inliners from these matches
-        _,pts1_idx,lines = GetInlierRANSANC(pts1, pts2, line_num,num_iterations=1000, threshold=0.5)
+        _,pts1_idx,lines = GetInlierRANSANC(pts1, pts2, line_num,num_iterations=1000, threshold=1)
 
         if len(pts1_idx) >= 8:
             pts1 = pts1[pts1_idx]
@@ -1628,7 +1629,7 @@ def main():
         Xset.append(X0_refined)
 
         # print(len(X0_refined)) 
-        VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
+        #VisualizeXZPlaneViewInitial(X0_refined, R_dict[i], C_dict[i]) 
     
     # VisualizeXZPlaneViewComplete(Xset[:2], Rset[:2], Cset[:2])
 
@@ -1636,7 +1637,7 @@ def main():
 
     pts_flat = flatten_list(all_points_2d)
     all_points = flatten_list(Xset)
-    #print(pts_flat.shape)
+    #print(all_points_2d.shape) #Not a numpy array so this gives error
 
     #Removing points outside the range
     #all_points,all_points_2d = filter_points_by_range(all_points, all_points_2d, x_range=(-20, 20), z_range=(-5, 25))
