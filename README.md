@@ -21,4 +21,5 @@ This project reconstructs a 3D scene and estimates camera poses using a given se
 - **Sparse 3D Point Cloud**: A set of reconstructed 3D points representing the scene.
 - **Camera Poses**: Estimated positions and orientations of the cameras.
 
+![Final Output](images/Final SfM.png)
 
